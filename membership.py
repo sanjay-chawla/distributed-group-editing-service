@@ -1,5 +1,4 @@
 class Server(object):
-    
     def __init__(self, id, group = None):
         self.id = id
         self.group = group
@@ -11,17 +10,17 @@ class Server(object):
         >>> leader = Server(0, Group(membership))
         >>> leader.report_group_membership()
         Server 0's view of group memembership:
-        {"leader": 0, "followers": []}
+        '{"leader": 0, "followers": []}'
 
         >>> membership = {"leader": 2, "followers": [1, 3, 5]}
         >>> follwer = Server(3, membership)
         >>> follwer.report_group_membership()
         Server 3's view of group memembership:
-        {'leader': 2, 'followers': [1, 3, 5]}
+        "{'leader': 2, 'followers': [1, 3, 5]}"
         """
         print("Server {0}'s view of group memembership:".format(self.id))
         if self.group:
-            membership = self.group
+            membership = repr(self.group)
             return membership
         else:
             return
@@ -87,12 +86,12 @@ def join_group_send_and_recv_test():
     >>> leader = Server(1, Group(membership_at_leader))
     >>> leader.report_group_membership()
     Server 1's view of group memembership:
-    {"leader": 1, "followers": [0, 2, 3, 4]}
+    '{"leader": 1, "followers": [0, 2, 3, 4]}'
     >>> leader.group.join_group(5)
     >>> leader.report_group_membership()
     Server 1's view of group memembership:
-    {"leader": 1, "followers": [0, 2, 3, 4, 5]}
-    >>> message_to_send = repr(leader.report_group_membership())
+    '{"leader": 1, "followers": [0, 2, 3, 4, 5]}'
+    >>> message_to_send = leader.report_group_membership()
     Server 1's view of group memembership:
     >>> pseudo_send_msg(1, 5, message_to_send)
     >>> message_recevied = pseudo_recv_msg(5)
@@ -101,7 +100,7 @@ def join_group_send_and_recv_test():
     >>> server5.group = Group(membership)
     >>> server5.report_group_membership()
     Server 5's view of group memembership:
-    {"leader": 1, "followers": [0, 2, 3, 4, 5]}
+    '{"leader": 1, "followers": [0, 2, 3, 4, 5]}'
     """
 
 def join_group_multicast_test():
@@ -135,7 +134,7 @@ def join_group_multicast_test():
     print()
 
     # leader sends a message to its updated followers
-    message_to_send = repr(servers[leader_num].report_group_membership())
+    message_to_send = servers[leader_num].report_group_membership()
     followers = servers[leader_num].group.followers
     pseudo_multicast(leader_num, followers, message_to_send)
 
