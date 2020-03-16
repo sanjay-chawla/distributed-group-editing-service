@@ -1,7 +1,20 @@
+import socket
+import struct
+import sys
+import pdb
+import pickle
+
+MULTICAST_GROUP_ADDRESS = '224.3.29.71'
+MULTICAST_GROUP_PORT = 10000
+
 class Server(object):
     def __init__(self, id, group = None):
         self.id = id
         self.group = group
+        self.multicast_group = (MULTICAST_GROUP_ADDRESS, MULTICAST_GROUP_PORT)
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket.settimeout(0.2)
+        self.socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, struct.pack('b', 1))
         #self.state = ("leader", "follower", "candidate")
 
     def report_group_membership(self):
@@ -57,22 +70,39 @@ class Group(object):
 # Assmue at most 6 servers
 msgs = ["" for i in range(6)] # initilise a list of 6 empty strings
 
-def pseudo_multicast(sender, receivers, msg):
+def multicast(sender, msg):
     """"""
-    for recevier in receivers:
-        pseudo_send_msg(sender, recevier, msg)
+    responses = []
+    try:
+        # Send data to the multicast group
+        return_code = send_msg(sender, msg)
 
-def pseudo_send_msg(sender, recevier, msg):
-    """"""
-    if not msgs[recevier]:
-        msgs[recevier] = msg
+        # Look for responses from all recipients
+        while True:
+            response = recv_response(sender)
+            if response == "timeout":
+                break
+            responses.append(response)
+    return responses
 
-def pseudo_recv_msg(recevier):
+def send_msg(sender, msg):
     """"""
-    if msgs[recevier] != "":
-        message = msgs[recevier]
-        msgs[recevier] = ""
-    return message
+    print ("{}, sending '{}'".format(sys.stderr, msg))
+    msg = Message(sender.group, sender.id, msg)
+    msg = pickle.dumps(msg)
+    sent = sender.socket.sendto(msg, sender.multicast_group)
+    return sent
+
+def recv_response(sender):
+    """"""
+    print("{}, waiting to receive".format(sys.stderr))
+    try:
+        data, server = sender.socket.recvfrom(16)
+        print("{}, received '{}' from {}".format(sys.stderr, data, server))
+        return data, server
+    except socket.timeout:
+        print("{}, timed out, no more responses".format(sys.stderr))
+        return "timeout"
 
 def join_group_send_and_recv_test():
     """
@@ -115,7 +145,7 @@ def join_group_multicast_test():
     membership_before = {"leader": 1, "followers": [0, 2, 3, 4]}
     leader_num = 1
     followers = [0, 2, 3, 4]
-    
+
     # Before join group
     servers = dict()
     print("******Before join group:******")
@@ -148,3 +178,22 @@ def join_group_multicast_test():
         print(servers[i].report_group_membership())
 
 join_group_multicast_test()
+
+class Message:
+
+    def __init__(self, group_id, member_id, data=None):
+        self.group_id = group_id
+        self.member_id = member_id
+        self.data = data
+
+    def get_group_id(self):
+        return self.group_id
+
+    def get_message_type(self):
+        return self.type
+
+    def get_member_id(self):
+        return self.member_id
+
+    def get_data(self):
+        return self.__data
