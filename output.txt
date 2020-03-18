@@ -1,0 +1,62 @@
+******Before join group:******
+Server 1's view of group memembership:
+>> socket ('0.0.0.0', 0)
+{"leader": 1, "followers": [0, 2, 3, 4]}
+Server 0's view of group memembership:
+>> socket ('224.1.1.1', 10000)
+{"leader": 1, "followers": [0, 2, 3, 4]}
+Server 2's view of group memembership:
+>> socket ('224.1.1.1', 10000)
+{"leader": 1, "followers": [0, 2, 3, 4]}
+<_io.TextIOWrapper name='<stderr>' mode='w' encoding='UTF-8'>, waiting to receive
+Server 3's view of group memembership:
+>> socket ('224.1.1.1', 10000)
+{"leader": 1, "followers": [0, 2, 3, 4]}
+Server 4's view of group memembership:
+>> socket ('224.1.1.1', 10000)
+{"leader": 1, "followers": [0, 2, 3, 4]}
+<_io.TextIOWrapper name='<stderr>' mode='w' encoding='UTF-8'>, waiting to receive
+<_io.TextIOWrapper name='<stderr>' mode='w' encoding='UTF-8'>, waiting to receive
+<_io.TextIOWrapper name='<stderr>' mode='w' encoding='UTF-8'>, waiting to receive
+Server 5's view of group memembership:
+>> socket ('0.0.0.0', 0)
+None
+
+******leader joins 5 to its group:******
+Server 0's view of group memembership:
+>> socket ('224.1.1.1', 10000)
+{"leader": 1, "followers": [0, 2, 3, 4]}
+Server 1's view of group memembership:
+>> socket ('0.0.0.0', 0)
+{"leader": 1, "followers": [0, 2, 3, 4, 5]}
+Server 2's view of group memembership:
+>> socket ('224.1.1.1', 10000)
+{"leader": 1, "followers": [0, 2, 3, 4]}
+Server 3's view of group memembership:
+>> socket ('224.1.1.1', 10000)
+{"leader": 1, "followers": [0, 2, 3, 4]}
+Server 4's view of group memembership:
+>> socket ('224.1.1.1', 10000)
+{"leader": 1, "followers": [0, 2, 3, 4]}
+Server 5's view of group memembership:
+>> socket ('0.0.0.0', 0)
+None
+
+Server 1's view of group memembership:
+>> socket ('0.0.0.0', 0)
+<_io.TextIOWrapper name='<stderr>' mode='w' encoding='UTF-8'>, sending '{"leader": 1, "followers": [0, 2, 3, 4, 5]}' to ('224.1.1.1', 10000)
+3, received 'b'\x80\x03c__main__\nMess'' from ('192.168.0.24', 57160)
+<_io.TextIOWrapper name='<stderr>' mode='w' encoding='UTF-8'>, waiting to receive
+0, received 'b'\x80\x03c__main__\nMess'' from ('192.168.0.24', 57160)
+<_io.TextIOWrapper name='<stderr>' mode='w' encoding='UTF-8'>, waiting to receive
+2, received 'b'\x80\x03c__main__\nMess'' from ('192.168.0.24', 57160)
+<_io.TextIOWrapper name='<stderr>' mode='w' encoding='UTF-8'>, waiting to receive
+<_io.TextIOWrapper name='<stderr>' mode='w' encoding='UTF-8'>, waiting to receive
+4, received 'b'\x80\x03c__main__\nMess'' from ('192.168.0.24', 57160)
+<_io.TextIOWrapper name='<stderr>' mode='w' encoding='UTF-8'>, waiting to receive
+3, timed out, no more responses
+<_io.TextIOWrapper name='<stderr>' mode='w' encoding='UTF-8'>, waiting to receive
+0, timed out, no more responses
+<_io.TextIOWrapper name='<stderr>' mode='w' encoding='UTF-8'>, waiting to receive
+1, timed out, no more responses
+******After the message is received******

@@ -1,22 +1,35 @@
+#!/usr/bin/python
+
 import socket
 import struct
 import sys
 import pdb
 import pickle
+import _thread
 
-MULTICAST_GROUP_ADDRESS = '224.3.29.71'
+MULTICAST_GROUP_ADDRESS = '224.1.1.1'#socket.gethostbyname(socket.gethostname())
 MULTICAST_GROUP_PORT = 10000
 
 class Server(object):
-    def __init__(self, id, group = None):
+    def __init__(self, id, group = None, initial_state = "candidate"):
         self.id = id
         self.group = group
         self.multicast_group = (MULTICAST_GROUP_ADDRESS, MULTICAST_GROUP_PORT)
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         self.socket.settimeout(0.2)
-        self.socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, struct.pack('b', 1))
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.initial_state = initial_state 
         #self.state = ("leader", "follower", "candidate")
 
+    def handle_connection(self):
+        """socket bind for leader, connect for follower"""
+        if self.initial_state == "leader":
+            self.socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, struct.pack('b', 1))
+        else:
+            mreq = struct.pack('4sL', socket.inet_aton(self.multicast_group[0]), socket.INADDR_ANY)
+            self.socket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+            self.socket.bind(self.multicast_group)
+        
     def report_group_membership(self):
         """
         >>> membership = {"leader": 0, "followers": []}
@@ -32,11 +45,60 @@ class Server(object):
         "{'leader': 2, 'followers': [1, 3, 5]}"
         """
         print("Server {0}'s view of group memembership:".format(self.id))
+        print(">> socket {0}".format(self.socket.getsockname()))
         if self.group:
             membership = repr(self.group)
             return membership
         else:
             return
+    
+    def send_msg(self, msg):
+        """"""
+        print ("{}, sending '{}' to {}".format(sys.stderr, msg, self.multicast_group))
+        msg = Message(self.group, self.id, msg)
+        msg = pickle.dumps(msg)
+        sent = self.socket.sendto(msg, self.multicast_group)
+        return sent
+
+    def recv_response(self):
+        """"""
+        print("{}, waiting to receive".format(sys.stderr))
+        try:
+            data, server = self.socket.recvfrom(16)
+            print("{}, received '{}' from {}".format(self.id, data, server))
+            return data, server
+        except socket.timeout:
+            print("{}, timed out, no more responses".format(self.id))
+            return "timeout"
+
+    def multicast(self, msg):
+        """"""
+        responses = []
+        try:
+            # Send data to the multicast group
+            return_code = self.send_msg(msg)
+
+            # Look for responses from all recipients
+            while True:
+                response = self.recv_response()
+                if response == "timeout":
+                    break
+                responses.append(response)
+        except:
+            print("Unexpected error:", sys.exc_info()[0])
+            raise
+        return responses
+    
+    def listen(self):
+        """Listens for multicast messages"""
+        responses = []
+        while True:
+                response = self.recv_response()
+                #if response == "timeout":
+                    #break
+                responses.append(response)
+        return responses
+
 
 class Group(object):
     """
@@ -66,43 +128,27 @@ class Group(object):
     def __repr__(self):
         return '{' + '"leader": {0}, "followers": {1}'.format(str(self.leader), str(self.followers)) + '}'
 
+class Message:
+
+    def __init__(self, group_id, member_id, data=None):
+        self.group_id = group_id
+        self.member_id = member_id
+        self.data = data
+
+    def get_group_id(self):
+        return self.group_id
+
+    def get_message_type(self):
+        return self.type
+
+    def get_member_id(self):
+        return self.member_id
+
+    def get_data(self):
+        return self.__data
 
 # Assmue at most 6 servers
 msgs = ["" for i in range(6)] # initilise a list of 6 empty strings
-
-def multicast(sender, msg):
-    """"""
-    responses = []
-    try:
-        # Send data to the multicast group
-        return_code = send_msg(sender, msg)
-
-        # Look for responses from all recipients
-        while True:
-            response = recv_response(sender)
-            if response == "timeout":
-                break
-            responses.append(response)
-    return responses
-
-def send_msg(sender, msg):
-    """"""
-    print ("{}, sending '{}'".format(sys.stderr, msg))
-    msg = Message(sender.group, sender.id, msg)
-    msg = pickle.dumps(msg)
-    sent = sender.socket.sendto(msg, sender.multicast_group)
-    return sent
-
-def recv_response(sender):
-    """"""
-    print("{}, waiting to receive".format(sys.stderr))
-    try:
-        data, server = sender.socket.recvfrom(16)
-        print("{}, received '{}' from {}".format(sys.stderr, data, server))
-        return data, server
-    except socket.timeout:
-        print("{}, timed out, no more responses".format(sys.stderr))
-        return "timeout"
 
 def join_group_send_and_recv_test():
     """
@@ -150,7 +196,12 @@ def join_group_multicast_test():
     servers = dict()
     print("******Before join group:******")
     for i in [leader_num] + followers:
-        servers[i] = Server(i, Group(membership_before))
+        servers[i] = Server(i, Group(membership_before), "follower")
+        if i == leader_num:
+            servers[i].initial_state = "leader"
+        else:
+            _thread.start_new_thread(servers[i].listen, ())
+        servers[i].handle_connection()
         print(servers[i].report_group_membership())
     servers[5] = Server(5)
     print(servers[5].report_group_membership())
@@ -166,34 +217,18 @@ def join_group_multicast_test():
     # leader sends a message to its updated followers
     message_to_send = servers[leader_num].report_group_membership()
     followers = servers[leader_num].group.followers
-    pseudo_multicast(leader_num, followers, message_to_send)
+    #multicast(leader_num, followers, message_to_send)
+    servers[leader_num].multicast(message_to_send)
 
     # mimic each followers receives such message at update its group attribute
     print("******After the message is received******")
-    messages_received = dict()
-    for i in followers:
-        messages_received[i] = pseudo_recv_msg(i)
-        membership = eval(messages_received[i])
-        servers[i].group = Group(membership)
-        print(servers[i].report_group_membership())
+    #messages_received = dict()
+    #for i in followers:
+    #    messages_received[i] = recv_response(servers[leader_num])
+    #    membership = eval(messages_received[i])
+    #    servers[i].group = Group(membership)
+    #    print(servers[i].report_group_membership())
 
 join_group_multicast_test()
 
-class Message:
 
-    def __init__(self, group_id, member_id, data=None):
-        self.group_id = group_id
-        self.member_id = member_id
-        self.data = data
-
-    def get_group_id(self):
-        return self.group_id
-
-    def get_message_type(self):
-        return self.type
-
-    def get_member_id(self):
-        return self.member_id
-
-    def get_data(self):
-        return self.__data
