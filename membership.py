@@ -60,15 +60,17 @@ class Server(object):
         sent = self.socket.sendto(msg, self.multicast_group)
         return sent
 
-    def recv_response(self):
+    def recv_response(self, is_print_wait_msg=True):
         """"""
-        print("{}, waiting to receive".format(sys.stderr))
+        if is_print_wait_msg:
+            print("{}, waiting to receive".format(sys.stderr))
         try:
-            data, server = self.socket.recvfrom(16)
+            data, server = self.socket.recvfrom(1024)
             print("{}, received '{}' from {}".format(self.id, data, server))
             return data, server
         except socket.timeout:
-            print("{}, timed out, no more responses".format(self.id))
+            if is_print_wait_msg:
+                print("{}, timed out, no more responses".format(self.id))
             return "timeout"
 
     def multicast(self, msg):
@@ -89,14 +91,15 @@ class Server(object):
             raise
         return responses
     
-    def listen(self):
+    def listen(self, is_print_wait_msg=True):
         """Listens for multicast messages"""
+        
         responses = []
         while True:
-                response = self.recv_response()
-                #if response == "timeout":
-                    #break
-                responses.append(response)
+            response = self.recv_response(is_print_wait_msg)
+            #if response == "timeout":
+                #break
+            responses.append(response)
         return responses
 
 
@@ -133,7 +136,7 @@ class Message:
     def __init__(self, group_id, member_id, data=None):
         self.group_id = group_id
         self.member_id = member_id
-        self.data = data
+        self.__data = data
 
     def get_group_id(self):
         return self.group_id
@@ -146,89 +149,4 @@ class Message:
 
     def get_data(self):
         return self.__data
-
-# Assmue at most 6 servers
-msgs = ["" for i in range(6)] # initilise a list of 6 empty strings
-
-def join_group_send_and_recv_test():
-    """
-    Start with a group with leader 1 and followers [0, 2, 3, 4]
-    Server 5 wants to join the group
-    It sends a message to the leader and leader updates the group membership
-    The leader 1 replies the current group membership
-    Server 5 creates such group using the membership and binds it to its group
-
-    >>> membership_at_leader = {"leader": 1, "followers": [0, 2, 3, 4]}
-    >>> leader = Server(1, Group(membership_at_leader))
-    >>> leader.report_group_membership()
-    Server 1's view of group memembership:
-    '{"leader": 1, "followers": [0, 2, 3, 4]}'
-    >>> leader.group.join_group(5)
-    >>> leader.report_group_membership()
-    Server 1's view of group memembership:
-    '{"leader": 1, "followers": [0, 2, 3, 4, 5]}'
-    >>> message_to_send = leader.report_group_membership()
-    Server 1's view of group memembership:
-    >>> pseudo_send_msg(1, 5, message_to_send)
-    >>> message_recevied = pseudo_recv_msg(5)
-    >>> membership = eval(message_recevied)
-    >>> server5 = Server(5)
-    >>> server5.group = Group(membership)
-    >>> server5.report_group_membership()
-    Server 5's view of group memembership:
-    '{"leader": 1, "followers": [0, 2, 3, 4, 5]}'
-    """
-
-def join_group_multicast_test():
-    """
-    Start with a group with leader 1 and followers [0, 2, 3, 4]
-    Server 5 wants to join the group
-    It sends a message to the leader and leader updates the group membership
-    The leader 1 sends the current group membership to all followers
-    Each follower creat such group using the message received and bind it to its group attribute
-    """
-    # Set up the scenes with leader 1 and followers [0, 2, 3, 4]
-    membership_before = {"leader": 1, "followers": [0, 2, 3, 4]}
-    leader_num = 1
-    followers = [0, 2, 3, 4]
-
-    # Before join group
-    servers = dict()
-    print("******Before join group:******")
-    for i in [leader_num] + followers:
-        servers[i] = Server(i, Group(membership_before), "follower")
-        if i == leader_num:
-            servers[i].initial_state = "leader"
-        else:
-            _thread.start_new_thread(servers[i].listen, ())
-        servers[i].handle_connection()
-        print(servers[i].report_group_membership())
-    servers[5] = Server(5)
-    print(servers[5].report_group_membership())
-    print()
-
-    # join a group member in the leader
-    print("******leader joins 5 to its group:******")
-    servers[leader_num].group.join_group(5)
-    for i in range(6):
-        print(servers[i].report_group_membership())
-    print()
-
-    # leader sends a message to its updated followers
-    message_to_send = servers[leader_num].report_group_membership()
-    followers = servers[leader_num].group.followers
-    #multicast(leader_num, followers, message_to_send)
-    servers[leader_num].multicast(message_to_send)
-
-    # mimic each followers receives such message at update its group attribute
-    print("******After the message is received******")
-    #messages_received = dict()
-    #for i in followers:
-    #    messages_received[i] = recv_response(servers[leader_num])
-    #    membership = eval(messages_received[i])
-    #    servers[i].group = Group(membership)
-    #    print(servers[i].report_group_membership())
-
-join_group_multicast_test()
-
 
