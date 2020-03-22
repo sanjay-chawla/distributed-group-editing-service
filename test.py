@@ -9,7 +9,7 @@ Each follower creat such group using the message received and bind it to its gro
 import sys
 from membership import *
 
-membership_before = {"leader": 1, "followers": [0, 2, 3, 4]}
+membership_before = {"leader": 1, "followers": [0, 3]}
 leader_num = membership_before["leader"]
 followers = membership_before["followers"]
 server_to_join = 5
@@ -29,14 +29,14 @@ is_leader, is_follower = server_id == leader_num, server_id in followers
 
 def set_up_server(server_id, is_leader, is_follower):
     """
-    Set up a server depending on whether it is a leader/follower 
+    Set up a server depending on whether it is a leader/follower
     or not in the current group
     """
     if is_leader:
-        server = Server(server_id, Group(membership_before), "leader")
+        server = Server(server_id, Group(0, membership_before), "leader")
         state = "leader"
     elif is_follower:
-        server = Server(server_id, Group(membership_before), "follower")
+        server = Server(server_id, Group(0, membership_before), "follower")
         state = "follower"
     else:
         server = Server(server_id)
@@ -65,19 +65,20 @@ leader_join_group(is_leader, server_to_join)
 leader_multicast_msg(is_leader)
 
 
-print("Start to listening to messages")
+print("Started listening for messages")
+server.receive()
+
+"""
 while True:
     response = server.recv_response(is_print_wait_msg=False)
     if response != "timeout":
+        pdb.set_trace()
         msg = pickle.loads(response[0])
+
         print()
         print("Message received as:")
         membership = eval(msg.get_data())
         print(membership)
         server.group = Group(membership)
         print(server.report_group_membership())
-
-
-
-
-
+"""

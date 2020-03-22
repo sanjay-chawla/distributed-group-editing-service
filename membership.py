@@ -5,20 +5,24 @@ import struct
 import sys
 import pdb
 import pickle
-import _thread
+import Queue as queue
+
 
 MULTICAST_GROUP_ADDRESS = '224.1.1.1'#socket.gethostbyname(socket.gethostname())
-MULTICAST_GROUP_PORT = 10000
+MULTICAST_GROUP_PORT = 10001
 
 class Server(object):
     def __init__(self, id, group = None, initial_state = "candidate"):
         self.id = id
         self.group = group
+        self.sequence_number = 1
+        self.received_messages = {} # a dictionary for sender_id: sequence_number pairs to keep track of what messages this server has received
+        self.message_bag = queue.Queue(maxsize=400)
         self.multicast_group = (MULTICAST_GROUP_ADDRESS, MULTICAST_GROUP_PORT)
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-        self.socket.settimeout(0.2)
+        self.socket.settimeout(2.0)
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.initial_state = initial_state 
+        self.initial_state = initial_state
         #self.state = ("leader", "follower", "candidate")
 
     def handle_connection(self):
@@ -29,7 +33,7 @@ class Server(object):
             mreq = struct.pack('4sL', socket.inet_aton(self.multicast_group[0]), socket.INADDR_ANY)
             self.socket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
             self.socket.bind(self.multicast_group)
-        
+
     def report_group_membership(self):
         """
         >>> membership = {"leader": 0, "followers": []}
@@ -51,56 +55,56 @@ class Server(object):
             return membership
         else:
             return
-    
+
     def send_msg(self, msg):
         """"""
-        print ("{}, sending '{}' to {}".format(sys.stderr, msg, self.multicast_group))
         msg = Message(self.group, self.id, msg)
         msg = pickle.dumps(msg)
         sent = self.socket.sendto(msg, self.multicast_group)
         return sent
 
-    def recv_response(self, is_print_wait_msg=True):
+    def recv_response(self):
         """"""
-        if is_print_wait_msg:
-            print("{}, waiting to receive".format(sys.stderr))
         try:
-            data, server = self.socket.recvfrom(1024)
-            print("{}, received '{}' from {}".format(self.id, data, server))
-            return data, server
+            message, server = self.socket.recvfrom(4096)
+            x = pickle.loads(message)
+            y = pickle.loads(x.get_sequence_number())
+            return y
         except socket.timeout:
-            if is_print_wait_msg:
-                print("{}, timed out, no more responses".format(self.id))
             return "timeout"
 
     def multicast(self, msg):
-        """"""
-        responses = []
-        try:
-            # Send data to the multicast group
-            return_code = self.send_msg(msg)
 
-            # Look for responses from all recipients
-            while True:
-                response = self.recv_response()
-                if response == "timeout":
-                    break
-                responses.append(response)
-        except:
-            print("Unexpected error:", sys.exc_info()[0])
-            raise
-        return responses
-    
-    def listen(self, is_print_wait_msg=True):
-        """Listens for multicast messages"""
-        
-        responses = []
+        message = Message(self.group.id, self.id, self.sequence_number, msg)
+        data_string = pickle.dumps(message)
+        #pdb.set_trace()
+        return_code = self.send_msg(data_string)
+        self.sequence_number += 1
+        return "multicast_sent"
+
+    def receive(self):
+        """Listens for multicast messsys.stderrages"""
+
         while True:
-            response = self.recv_response(is_print_wait_msg)
-            #if response == "timeout":
-                #break
-            responses.append(response)
-        return responses
+            response = self.recv_response()
+            if response != "timeout":
+                #pdb.set_trace()
+                try:
+                    if response.get_sequence_number() in self.received_messages[response.get_sender_id()]:
+                        return "previously_received_message"
+                except KeyError:
+                    self.received_messages[response.get_sender_id()] = []
+                if response.get_sender_id() != self.id:
+                    msg = "multicast_received_{}_{}".format(response.get_sender_id(), response.get_sequence_number())
+                    confirmation = Message(self.group.id, self.id, self.sequence_number, msg)
+                    data_string = pickle.dumps(confirmation)
+                    self.send_msg(data_string)
+                    for member in range(self.group.group_size() - 1):
+                        confirmation = self.recv_response()
+                        if confirmation == "timeout":
+                            return "multicast_failure"
+                    self.received_messages[response.get_sender_id()].append(response.get_sequence_number())
+                    return response
 
 
 class Group(object):
@@ -116,7 +120,8 @@ class Group(object):
     >>> first_group
     {"leader": 0, "followers": [1, 2, 4, 5, 8]}
     """
-    def __init__(self, membership):
+    def __init__(self, id, membership):
+        self.id = id
         self.leader = membership["leader"]
         self.followers = list(membership["followers"])
 
@@ -128,25 +133,28 @@ class Group(object):
         if server in self.followers:
             self.followers.remove(server)
 
+    def group_size(self):
+        return len(self.followers) + 1
+
     def __repr__(self):
         return '{' + '"leader": {0}, "followers": {1}'.format(str(self.leader), str(self.followers)) + '}'
 
 class Message:
 
-    def __init__(self, group_id, member_id, data=None):
-        self.group_id = group_id
-        self.member_id = member_id
+    def __init__(self, group_id, sender_id, sequence_number, data=None):
+        self.__group_id = group_id
+        self.__sender_id = sender_id
+        self.__sequence_number = sequence_number
         self.__data = data
 
     def get_group_id(self):
-        return self.group_id
+        return self.__group_id
 
-    def get_message_type(self):
-        return self.type
+    def get_sender_id(self):
+        return self.__sender_id
 
-    def get_member_id(self):
-        return self.member_id
+    def get_sequence_number(self):
+        return self.__sequence_number
 
     def get_data(self):
         return self.__data
-
