@@ -22,6 +22,7 @@ class Server(object):
 
         # Comms
         self.sequence_number = 1
+        self.commit_pending = False
         self.received_messages = {} # a dictionary for sender_id: sequence_number pairs to keep track of what messages this server has received
         self.message_bag = queue.Queue(maxsize=400)
 
@@ -106,7 +107,7 @@ class Server(object):
         data_string = pickle.dumps(message)
         #pdb.set_trace()
         return_code = self.send_msg(data_string)
-        self.sequence_number += 1
+        self.commit_pending = True
         return "multicast_sent"
 
     def receive(self):
@@ -115,26 +116,28 @@ class Server(object):
         while True:
             response, server = self.recv_response()
             if response != "timeout":
+                try:
+                    if response.get_sequence_number() in self.received_messages[response.get_sender_id()]:
+                        print("previously_received_message")
+                        # return
+                except KeyError:
+                    self.received_messages[response.get_sender_id()] = []
+                self.received_messages[response.get_sender_id()].append(response.get_sequence_number())
+
                 # Leader only receives acknowledgments
                 if self.current_state == "Leader" and isinstance(response, AcknowledgementMessage):
                     # TODO: check all follower received response, otherwise resend
                     print(response.repr())
                 else:
-                    try:
-                        if response.get_sequence_number() in self.received_messages[response.get_sender_id()]:
-                            print("previously_received_message")
-                            # return
-                        
-                    except KeyError:
-                        self.received_messages[response.get_sender_id()] = []
-
                     # In any case
                     # Others handle every type of Message
                     if isinstance(response, AcknowledgementMessage):
-                        # Should not receive Ack if not a leader, but lets just print
                         print(response.repr())
                     elif isinstance(response, MembershipMessage):
                         print(response.repr())
+                        # Modify state
+                        self.sequence_number = response.get_sequence_number()
+                        self.commit_pending = True
                         # Modify Membership
                         self.modify_membership(response.get_membership_dict())
                         # Acknowledge
@@ -158,7 +161,29 @@ class Server(object):
                         print("Send a Message object")
                     
                     # return response
-
+            else :
+                if self.group != None and self.received_messages and self.commit_pending:
+                    sequence_success = True
+                    for follower in self.group.followers:
+                        try:
+                            if self.sequence_number not in self.received_messages[follower]:
+                                sequence_success = False
+                                break
+                        except KeyError:
+                            # print("Waiting for first message")
+                            sequence_success = False
+                
+                    if sequence_success:
+                        print("Multicast sequence number: {} complete".format(self.sequence_number))
+                        self.sequence_number += 1
+                        self.commit_pending = False
+                    else:
+                        print("sequence number {} not found in followers {}, all messages_received {}"
+                            .format(self.sequence_number, self.group.followers, self.received_messages))
+                        print("Multicast sequence number: {} failed".format(self.sequence_number))
+                        # If follower, discard message
+                        # If leader, resend message
+             
 
 
 class Group(object):
