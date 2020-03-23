@@ -19,7 +19,7 @@ def parse_command_line():
     Return the server_id from the command line
     """
     if len(sys.argv) != 2:
-        print("Usage: python test.py SEVER_ID")
+        print("Usage: python test.py SERVER_ID")
         quit()
     else:
         return int(sys.argv[1])
@@ -33,15 +33,14 @@ def set_up_server(server_id, is_leader, is_follower):
     or not in the current group
     """
     if is_leader:
-        server = Server(server_id, Group(0, membership_before), "leader")
+        server = Server(server_id, Group(0, membership_before))
         state = "leader"
     elif is_follower:
-        server = Server(server_id, Group(0, membership_before), "follower")
+        server = Server(server_id, Group(0, membership_before))
         state = "follower"
     else:
         server = Server(server_id)
         state = "candidate"
-    server.handle_connection()
     print("Setting up server {0} as {1}".format(server_id, state))
     return server
 
@@ -57,9 +56,7 @@ def leader_join_group(is_leader, server_to_join):
 
 def leader_multicast_msg(is_leader):
     if is_leader:
-        message_to_send = server.report_group_membership()
-        followers = server.group.followers
-        server.multicast(message_to_send)
+        server.multicast_membership()
 
 leader_join_group(is_leader, server_to_join)
 leader_multicast_msg(is_leader)
