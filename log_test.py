@@ -60,3 +60,4 @@ def log_test():
 
     #close the database in memory connection
     in_memory_db_conn.close()
+log_test()
