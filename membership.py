@@ -135,7 +135,6 @@ class Server(object):
                     self.acknowledged_messages[(message.sender_id, message.message_id)] = True
                 else:
                     ack = AcknowledgementMessage(self.group.id, self.id, message.message_id, data=None)
-                    print(type(server))
                     print(server)
                     self.unicast(ack, server)#send acknowledgment to sender
                     if (message.sender_id, message.message_id) not in self.received_messages:
@@ -191,7 +190,7 @@ class Server(object):
                 for dest_id, message in self.unacknowledged_messages:
                     if (dest_id, message.message_id) not in self.acknowledged_messages:
                         temp_unack_messages.append((dest_id, message))
-                        self.unicast(message)
+                        self.unicast(message, ('192.168.1.8', self.multicast_socket.getsockname()[1] ))
                 self.unacknowledged_messages = temp_unack_messages
 
     def user_input_thread(self):
