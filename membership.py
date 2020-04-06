@@ -1,12 +1,10 @@
-#!/usr/bin/python
-
 import socket
 import struct
+import threading
 import sys
 import pdb
 import pickle
-import Queue as queue
-
+import time
 
 MULTICAST_GROUP_ADDRESS = '224.1.1.1'#socket.gethostbyname(socket.gethostname())
 MULTICAST_GROUP_PORT = 10000
@@ -14,26 +12,46 @@ MULTICAST_GROUP_PORT = 10000
 class Server(object):
     def __init__(self, id, group = None, current_state = "candidate"):
 
-        self.id = id
-
         # Membership
         self.group = group
+        self.id = id
         self.current_state = current_state
 
         # Comms
-        self.sequence_number = 1
-        self.commit_pending = False
+        self.message_id_counter = 0
         self.received_messages = {} # a dictionary for sender_id: sequence_number pairs to keep track of what messages this server has received
-        self.message_bag = queue.Queue(maxsize=400)
+        self.acknowledged_messages = {}
+        self.unacknowledged_messages = []
+        self.ordered_message_bag = []
+
+
+        # sequencer parameters
+        self.ordered_message_bag_flags = []
+        self.expected_sequence_counter = 0
+
+        #params that are only directly used by sequencer node
+        self.sequence_counter = 0
+        self.sequencer_id = 0
+
+        #threading parameters
+        self.mutex = threading.Lock()
+
 
         self.multicast_group = (MULTICAST_GROUP_ADDRESS, MULTICAST_GROUP_PORT)
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-        self.socket.settimeout(2.0)
-        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        #multicast socket
+        self.multicast_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        self.multicast_socket.settimeout(2.0)
+        self.multicast_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+        #listen socket
+        self.listen_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        self.listen_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.listen_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, struct.pack('b', 1))
+        self.listen_socket.bind(self.multicast_group)
 
         self.modify_membership(group)
-        self.handle_connection()
-        
+        #self.handle_connection()
+
     def set_current_state(self):
         if self.group == None:
             self.current_state = "candidate"
@@ -42,23 +60,27 @@ class Server(object):
         elif self.id in self.group.followers:
             self.current_state = "follower"
 
-    def handle_connection(self):
-        """socket bind for leader, connect for follower"""
-        self.socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, struct.pack('b', 1))
-        if self.current_state != "leader":
-            self.socket.bind(self.multicast_group)
+    """
+        def handle_connection(self):
+            socket bind for follower
+            self.socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, struct.pack('b', 1))
+            if self.current_state != "leader":
+                self.socket.bind(self.multicast_group)
+    """
 
     def modify_membership(self, membership):
         self.group = membership
         before_state = self.current_state
         self.set_current_state()
+
+        """
         if before_state != self.current_state:
             mreq = struct.pack('4sL', socket.inet_aton(self.multicast_group[0]), socket.INADDR_ANY)
             if self.current_state == "follower":
                 self.socket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
             elif self.current_state == "candidate":
                 self.socket.setsockopt(socket.SOL_IP, socket.IP_DROP_MEMBERSHIP, mreq)
-
+        """
 
     def report_group_membership(self):
         """
@@ -75,116 +97,129 @@ class Server(object):
         "{'leader': 2, 'followers': [1, 3, 5]}"
         """
         print("Server {0}'s view of group memembership:".format(self.id))
-        print(">> socket {0}".format(self.socket.getsockname()))
+        print(">> socket {0}".format(self.multicast_socket.getsockname()))
         if self.group:
             membership = repr(self.group)
             return membership
         else:
             return
 
-    def send_msg(self, msg):
+    def unicast(self, message, server):
         """"""
-        sent = self.socket.sendto(msg, self.multicast_group)
-        return sent
-
-    def send_ack(self, msg, server):
-        """"""
-        sent = self.socket.sendto(msg, server)
-        return sent
-
-    def recv_response(self):
-        """"""
-        try:
-            message, server = self.socket.recvfrom(4096)
-            received_message = pickle.loads(message)
-            return received_message, server
-        except socket.timeout:
-            # print("timeout")
-            return "timeout", None
-
-    def multicast_membership(self):
-        message = MembershipMessage(self.group.id, self.id, self.sequence_number, self.group, None)
         data_string = pickle.dumps(message)
-        #pdb.set_trace()
-        return_code = self.send_msg(data_string)
-        self.commit_pending = True
-        return "multicast_sent"
+        sent = self.multicast_socket.sendto(data_string, server)
+        return sent
 
-    def receive(self):
-        """Listens for multicast messsys.stderrages"""
+    def multicast(self, message):
+        #pdb.set_trace()
+        for follower in self.group.followers:
+            with self.mutex:
+                self.unacknowledged_messages.append((follower, message))
+        data_string = pickle.dumps(message)
+        #sent = self.unicast(data_string, self.socket.getsockname()) #send message to self also
+        sent = self.multicast_socket.sendto(data_string, self.multicast_group)
+        self.message_id_counter += 1
+
+    def receive_thread(self):
+        """Listens for multicasted messages"""
 
         while True:
-            response, server = self.recv_response()
-            if response != "timeout":
-                try:
-                    if response.get_sequence_number() in self.received_messages[response.get_sender_id()]:
-                        print("previously_received_message")
-                        # return
-                except KeyError:
-                    self.received_messages[response.get_sender_id()] = []
-                self.received_messages[response.get_sender_id()].append(response.get_sequence_number())
-
-                # Leader only receives acknowledgments
-                if self.current_state == "Leader" and isinstance(response, AcknowledgementMessage):
-                    # TODO: check all follower received response, otherwise resend
-                    print(response.repr())
+            try:
+                byte_message, server = self.listen_socket.recvfrom(4096)
+                print("Received message")
+                message = pickle.loads(byte_message)
+                if isinstance(message, AcknowledgementMessage):
+                    self.acknowledged_messages[(message.sender_id, message.message_id)] = True
                 else:
-                    # In any case
-                    # Others handle every type of Message
-                    if isinstance(response, AcknowledgementMessage):
-                        print(response.repr())
-                    elif isinstance(response, MembershipMessage):
-                        print(response.repr())
-                        # Modify state
-                        self.sequence_number = response.get_sequence_number()
-                        self.commit_pending = True
-                        # Modify Membership
-                        self.modify_membership(response.get_membership_dict())
-                        # Acknowledge
-                        if response.get_sender_id() != self.id:
-                            confirmation = AcknowledgementMessage(self.group.id, self.id, self.sequence_number, response.repr())
-                            data_string = pickle.dumps(confirmation)
-                            if response.get_sender_id() == self.group.leader:
-                                self.send_ack(data_string, server)
-                            self.send_msg(data_string)
-                            """for member in range(self.group.group_size() - 1):
-                                confirmation = self.recv_response()
-                                if confirmation == "timeout":
-                                    print("multicast_failure")
-                                    # return
-                                self.received_messages[response.get_sender_id()].append(response.get_sequence_number())
-                                    """
-                        print(self.report_group_membership())
-                    elif isinstance(response, Message):
-                        print("What is this message?")
-                    else:
-                        print("Send a Message object")
-                    
-                    # return response
-            else :
-                if self.group != None and self.received_messages and self.commit_pending:
-                    sequence_success = True
-                    for follower in self.group.followers:
-                        try:
-                            if self.sequence_number not in self.received_messages[follower]:
-                                sequence_success = False
-                                break
-                        except KeyError:
-                            # print("Waiting for first message")
-                            sequence_success = False
-                
-                    if sequence_success:
-                        print("Multicast sequence number: {} complete".format(self.sequence_number))
-                        self.sequence_number += 1
-                        self.commit_pending = False
-                    else:
-                        print("sequence number {} not found in followers {}, all messages_received {}"
-                            .format(self.sequence_number, self.group.followers, self.received_messages))
-                        print("Multicast sequence number: {} failed".format(self.sequence_number))
-                        # If follower, discard message
-                        # If leader, resend message
-             
+                    ack = AcknowledgementMessage(self.group.id, self.id, message.message_id, data=None)
+                    print(type(server))
+                    print(server)
+                    self.unicast(ack, server)#send acknowledgment to sender
+                    if (message.sender_id, message.message_id) not in self.received_messages:
+                        self.received_messages[(message.sender_id, message.message_id)] = True
+                        if isinstance(message, SequencerMessage):
+                            self.ordered_message_bag_flags.append((message.sequence_counter, message.orig_sender, message.orig_message_id))
+                            self.update_ordered_message_bag()
+                        else:
+                            if self.id == self.sequencer_id:
+                                (group_id, sender_id, message_id, data, sequence_counter, orig_sender, orig_message_id)
+                                flagged_message = SequencerMessage(self.group.id, self.id, self.sequence_counter, message.sender_id, message.message_id )
+                                self.multicast(flagged_message)
+                                self.sequence_counter += 1
+                            self.ordered_message_bag.append((message.sender_id, message.message_id, message))
+                            self.update_ordered_message_bag()
+                continue
+            except socket.timeout:
+                pass
 
+    def update_ordered_message_bag(self):
+        while True:
+            new_ordered_message_bag = []
+            is_ever_delivered = False
+            for sender, message_id, message in self.ordered_message_bag:
+                is_delivered = False
+                for sequence_counter, orig_sender, orig_message_id in self.ordered_message_bag_flags:
+                    sequence_counter = int(sequence_counter)
+                    if sender == orig_sender and message_id == orig_message_id and self.expected_sequence_counter == sequence_counter_int:
+                        self.deliver(sender, message)
+                        is_delivered = True
+                        is_ever_delivered = True
+                        self.expected_sequence_counter += 1
+                        break
+
+                if not is_delivered:
+                    new_ordered_message_bag.append((sender, message_id, message))
+
+            self.ordered_message_bag = new_ordered_message_bag
+
+            if not is_ever_delivered:
+                break
+
+    def deliver(self, sender, message):
+        print("SUCCESSSS Delivering a message from: {}".format(sender))
+        return message
+
+    def resend_ack_thread(self):
+        """ Thread that re-sends all unacknowledged messages. """
+        while True:
+            time.sleep(0.2)
+
+            with self.mutex:
+                temp_unack_messages = []
+                for dest_id, message in self.unacknowledged_messages:
+                    if (dest_id, message.message_id) not in self.acknowledged_messages:
+                        temp_unack_messages.append((dest_id, message))
+                        self.unicast(message)
+                self.unacknowledged_messages = temp_unack_messages
+
+    def user_input_thread(self):
+        """ Thread that waits for user input and multicasts to other processes. """
+        print("Enter commands in the form of 'data' that will be packaged into messages (See membership.py line 190 for more info):")
+        for line in sys.stdin:
+            line = line[:-1]
+            #print("'{}'".format(line))
+            # TODO interpret message type from command line
+            #msg = ?
+            message = Message(group_id= self.group.id, sender_id= self.id, message_id= self.message_id_counter, data=line)
+            self.multicast(message)
+
+    def run(self):
+        #Start the server by initializing values and starting threads
+        thread_functions = [
+            self.resend_ack_thread,
+            self.receive_thread,
+            self.user_input_thread,
+        ]
+
+        threads = []
+        for thread_function in thread_functions:
+            thread = threading.Thread(target=thread_function)
+            thread.daemon = True
+            thread.start()
+            threads.append(thread)
+
+        for thread in threads:
+            thread.join()
 
 class Group(object):
     """
@@ -220,44 +255,35 @@ class Group(object):
 
 class Message(object):
     """ Try to make subclass for specific messages """
-    def __init__(self, group_id, sender_id, sequence_number, data=None):
-        self.__group_id = group_id
-        self.__sender_id = sender_id
-        self.__sequence_number = sequence_number
-        self.__data = data
-
-    def get_group_id(self):
-        return self.__group_id
-
-    def get_sender_id(self):
-        return self.__sender_id
-
-    def get_sequence_number(self):
-        return self.__sequence_number
-
-    def get_data(self):
-        return self.__data
+    def __init__(self, group_id=None, sender_id=None, message_id=None, data=None):
+        self.group_id = group_id
+        self.sender_id = sender_id
+        self.message_id = message_id
+        self.data = data
 
     def repr(self):
-        return "Message sequence {} for group {} from {}.".format(self.__sequence_number,
-            self.__group_id, self.__sender_id, self.__data)
+        return "Message sequence {} for group {} from {}.".format(self.message_id,
+            self.group_id, self.sender_id, self.data)
 
 class MembershipMessage(Message):
-    def __init__(self, group_id, sender_id, sequence_number, membershipDict, data=None):
-        super(MembershipMessage, self).__init__(group_id, sender_id, sequence_number, data)
-        self.__membershipDict = membershipDict
-
-    def get_membership_dict(self):
-        return self.__membershipDict
+    def __init__(self, group_id, sender_id, message_id, membershipDict, data=None):
+        super(MembershipMessage, self).__init__(group_id, sender_id, message_id, data)
+        self.membershipDict = membershipDict
 
     def repr(self):
-        return super(MembershipMessage, self).repr() + 'Received Membership: {}'.format(self.__membershipDict)
+        return super(MembershipMessage, self).repr() + 'Received Membership: {}'.format(self.membershipDict)
+
+class SequencerMessage(Message):
+    def __init__(self, sequence_counter, orig_sender, orig_message_id):
+        super(SequencerMessage, self).__init__(group_id, sender_id, message_id, data)
+        self.sequence_counter = sequence_counter
+        self.orig_sender = orig_sender
+        self.orig_message_id = orig_message_id
 
 class AcknowledgementMessage(Message):
     """docstring for AcknowledgementMessage"""
-    def __init__(self, group_id, sender_id, sequence_number, data=None):
-        super(AcknowledgementMessage, self).__init__(group_id, sender_id, sequence_number, data)
-        #self.arg = arg
-    
+    def __init__(self, group_id, sender_id, message_id, data=None):
+        super(AcknowledgementMessage, self).__init__(group_id, sender_id, message_id, data)
+
     def repr(self):
-        return 'Sender {} acknowledges "{}".'.format(self.get_sender_id(), self.get_data())
+        return 'Sender {} acknowledges "{}".'.format(self.sender_id, self.data)
