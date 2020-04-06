@@ -41,13 +41,16 @@ class Server(object):
         #multicast socket
         self.multicast_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         self.multicast_socket.settimeout(2.0)
-        self.multicast_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        #self.multicast_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.multicast_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, struct.pack('b', 1))
 
         #listen socket
         self.listen_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         self.listen_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.listen_socket.bind(('', self.multicast_group[1]))
+        self.listen_socket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, struct.pack('4sL', socket.inet_aton(self.multicast_group[0]), socket.INADDR_ANY))
         self.listen_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, struct.pack('b', 1))
-        self.listen_socket.bind(self.multicast_group)
+
 
         self.modify_membership(group)
         #self.handle_connection()
@@ -142,8 +145,8 @@ class Server(object):
                             self.update_ordered_message_bag()
                         else:
                             if self.id == self.sequencer_id:
-                                (group_id, sender_id, message_id, data, sequence_counter, orig_sender, orig_message_id)
-                                flagged_message = SequencerMessage(self.group.id, self.id, self.sequence_counter, message.sender_id, message.message_id )
+                                #(self, group_id, sender_id, message_id, data, sequence_counter, orig_sender, orig_message_id)
+                                flagged_message = SequencerMessage(self.group.id, self.id, self.message_id_counter, self.sequence_counter, message.sender_id, message.message_id)
                                 self.multicast(flagged_message)
                                 self.sequence_counter += 1
                             self.ordered_message_bag.append((message.sender_id, message.message_id, message))
@@ -159,8 +162,7 @@ class Server(object):
             for sender, message_id, message in self.ordered_message_bag:
                 is_delivered = False
                 for sequence_counter, orig_sender, orig_message_id in self.ordered_message_bag_flags:
-                    sequence_counter = int(sequence_counter)
-                    if sender == orig_sender and message_id == orig_message_id and self.expected_sequence_counter == sequence_counter_int:
+                    if sender == orig_sender and message_id == orig_message_id and self.expected_sequence_counter == sequence_counter:
                         self.deliver(sender, message)
                         is_delivered = True
                         is_ever_delivered = True
@@ -193,13 +195,10 @@ class Server(object):
                 self.unacknowledged_messages = temp_unack_messages
 
     def user_input_thread(self):
-        """ Thread that waits for user input and multicasts to other processes. """
+        """ Thread that takes input from user and multicasts it to other processes. """
         print("Enter commands in the form of 'data' that will be packaged into messages (See membership.py line 190 for more info):")
         for line in sys.stdin:
             line = line[:-1]
-            #print("'{}'".format(line))
-            # TODO interpret message type from command line
-            #msg = ?
             message = Message(group_id= self.group.id, sender_id= self.id, message_id= self.message_id_counter, data=line)
             self.multicast(message)
 
@@ -274,8 +273,10 @@ class MembershipMessage(Message):
         return super(MembershipMessage, self).repr() + 'Received Membership: {}'.format(self.membershipDict)
 
 class SequencerMessage(Message):
-    def __init__(self, sequence_counter, orig_sender, orig_message_id):
-        super(SequencerMessage, self).__init__(group_id, sender_id, message_id, data)
+    def __init__(self, group_id, sender_id, message_id, sequence_counter, orig_sender, orig_message_id):
+        self.group_id = group_id
+        self.sender_id = sender_id
+        self.message_id = message_id
         self.sequence_counter = sequence_counter
         self.orig_sender = orig_sender
         self.orig_message_id = orig_message_id
