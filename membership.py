@@ -208,11 +208,3 @@ class SequencerMessage(Message):
     def repr(self):
         return 'Sequencer Message {} acknowledges "{} from {}".'.format(self.sender_id, self.orig_message_id, self.orig_sender)
 
-
-class AcknowledgementMessage(Message):
-    """docstring for AcknowledgementMessage"""
-    def __init__(self, group_id, sender_id, message_id, data=None):
-        super(AcknowledgementMessage, self).__init__(group_id, sender_id, message_id, data)
-
-    def repr(self):
-        return 'Sender {} acknowledges "{}".'.format(self.sender_id, self.data)
