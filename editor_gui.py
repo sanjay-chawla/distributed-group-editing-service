@@ -98,7 +98,7 @@ def opn():
 def save():
 
     
-    file_name = asksaveasfilename(confirmoverwrite=False)
+    filename = asksaveasfilename()
 
     if filename:
 
