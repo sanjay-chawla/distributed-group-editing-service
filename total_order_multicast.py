@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import sys
 from membership import Server, Group
-from ast import literal_eval
 
 membership_before = {"leader": 0, "followers": [1, 2]}
 leader_num = membership_before["leader"]
