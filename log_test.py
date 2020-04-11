@@ -1,21 +1,5 @@
 from log import *
 
-def check_membership(conn):
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM group_membership")
-
-    rows = cur.fetchall()
-    for row in rows:
-        print(row)
-
-def print_log(log):
-    print("printing log records")
-    filename = log.filename
-    with open(filename, "r") as f:
-        for line in f:
-            print(line)
-
-
 def log_test():
     server_id = 5
     log = Log(server_id)
@@ -26,7 +10,7 @@ def log_test():
     # set up the the database in memory
     membership_before = {"leader": 0, "followers": [1, 2, 3, 4, 5]}
     
-    followers = str(membership_before["followers"])[1:-1].replace(",", "")
+    followers = str(membership_before["followers"])[1:-1]
     leader = membership_before["leader"]
     in_memory_db_conn.execute('''
     CREATE TABLE IF NOT EXISTS group_membership AS

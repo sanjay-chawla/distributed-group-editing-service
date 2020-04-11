@@ -52,13 +52,20 @@ class CheckPoint(object):
         bck = sqlite3.connect(self.filename)
         bck.backup(in_memory_conn)
         bck.close()
-        print("membership from checkpoint")
-        check_membership(in_memory_conn)
-        print()
         # excute sql statements in the log
-        # TODO
         with open(self.log.filename, "r") as f:
             for line in f:
                 tab_postition = line.find("\t")
                 sql_statement = line[tab_postition+1:]
+                print(">> Executing from log: {}".format(sql_statement))
                 in_memory_conn.execute(sql_statement)
+
+    def fetch_latest_state(self, in_memory_conn):
+        cursor = in_memory_conn.cursor()
+        cursor.execute("SELECT * FROM group_membership ORDER BY id DESC LIMIT 1")
+        result = cursor.fetchone()
+        group_id = list(map(int, result[1]))[0]
+        leader = list(map(int, result[2]))[0]
+        followers = list(map(int, result[3].replace("[","").replace("]","").split(",")))
+        expected_sequence_counter = list(map(int, result[4]))[0]
+        return group_id, leader, followers, expected_sequence_counter 
