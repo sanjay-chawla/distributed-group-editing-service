@@ -1,18 +1,14 @@
-# distributed-group-editing-service
+# Distributed Group Editing Service
 
-Test it on a PC with more than 4 cores
+An effort to implement a distributed text editor. All nodes are connected via UDP multicast communication. RAFT is used for consensus group management. Additionally, checkpoints store states in SQL Lite DB file and can be used to restore last state of the node.
 
-Open 4 terminals at the same folder
+## Running test
+1. We suggest using Terminator which allows multiple terminals to be accessed in a single window
+2. Setup desired group of nodes
+3. Run `./total_order_multicast.py <server_number> <restore_earlier_state>`
+    > You must run with restore False first to create a checkpoint, then use True to restore state
+4. Enter message in any terminal and other receive in same order
+5. Membership can be changes on the fly with `mem <group_id> <leader> [<follower1,follower2,..>]`
 
-
-
-# follower
-python test.py 3
-# outsider
-python test.py 5
-# follower
-python test.py 0
-# leader
-python test.py 1
-
-Result in output.png
+## Outputs
+Outputs are in screenshots (.png) files. Logs and checkpoint DB files are created in respective folders
