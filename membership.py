@@ -11,30 +11,32 @@ MULTICAST_GROUP_ADDRESS = '224.1.1.1'#socket.gethostbyname(socket.gethostname())
 MULTICAST_GROUP_PORT = 10000
 
 class Server(object):
-    def __init__(self, id, group_id, leader, followers, expected_sequence_counter = 1, current_state = "candidate", restore = True):
+    def __init__(self, id, group_id, leader, followers, expected_sequence_counter = 1, current_state = "listener", restore = True):
 
         # Basic
         self.id = id
         self.current_state = current_state
+        self.group = None
 
         # Log and DB
         self.log = Log(self.id)
-        self.log.purge()
         self.checkpoint = CheckPoint(self.id, self.log)
         self.in_memory_db_conn = sqlite3.connect(":memory:", check_same_thread=False)
         if restore:
             self.checkpoint.restore(self.log, self.in_memory_db_conn)
             group_id, leader, followers, expected_sequence_counter = self.checkpoint.fetch_latest_state(self.in_memory_db_conn)
         self.in_memory_db_conn.execute("CREATE TABLE IF NOT EXISTS group_membership (id INTEGER PRIMARY KEY AUTOINCREMENT, group_id, leader, followers, expected_sequence_counter);")
+        self.log.purge()
         
         # Comms
-        self.message_id_counter = expected_sequence_counter
         self.received_messages = {} 
         self.ordered_message_bag = []
+        self.failing_nodes = set()
 
         # sequencer parameters
         self.ordered_message_bag_flags = []
         self.expected_sequence_counter = expected_sequence_counter
+        self.message_id_counter = expected_sequence_counter
 
         #threading parameters
         self.mutex = threading.Condition()
@@ -62,18 +64,20 @@ class Server(object):
         elif self.id in self.group.followers:
             self.current_state = "follower"
         else:
-            self.current_state = "candidate"
+            self.current_state = "listener"
         self.store_state()
 
     def store_state(self):
-        self.in_memory_db_conn.execute("INSERT INTO group_membership(group_id, leader, followers, expected_sequence_counter) VALUES ('{}', '{}', '{}', '{}')".format(self.group.id, self.group.leader, self.group.followers, self.expected_sequence_counter))
-        self.in_memory_db_conn.commit()
-        self.checkpoint.take_snapshot(self.log, self.in_memory_db_conn)
-        
+        if self.group:
+            self.in_memory_db_conn.execute("INSERT INTO group_membership(group_id, leader, followers, expected_sequence_counter) VALUES ('{}', '{}', '{}', '{}')".format(self.group.id, self.group.leader, self.group.followers, self.expected_sequence_counter))
+            self.in_memory_db_conn.commit()
+            self.checkpoint.take_snapshot(self.log, self.in_memory_db_conn)
+            
     def modify_membership(self, group_id, leader, followers):
-        self.group = Group(group_id, leader, followers)
-        before_state = self.current_state
-        self.set_current_state()    
+        if group_id:    
+            self.group = Group(group_id, leader, followers)
+            before_state = self.current_state
+            self.set_current_state()    
         
         print(self.report_group_membership())
     
@@ -98,50 +102,65 @@ class Server(object):
                 byte_message, server = self.multicast_socket.recvfrom(4096)
                 message = pickle.loads(byte_message)
                 # print("Received message: {}".format(message.repr())) 
-                if isinstance(message, SequencerMessage):
-                    self.ordered_message_bag_flags.append((message.sender_id, message.orig_sender, message.orig_message_id))
-                else:
-                    flagged_message = SequencerMessage(self.group.id, self.id, self.message_id_counter, message.sender_id, message.message_id)
-                    self.multicast(flagged_message)
-                    if (message.sender_id, message.message_id) not in self.received_messages: 
-                        self.received_messages[(message.sender_id, message.message_id)] = False
-                        with self.mutex:
-                            self.ordered_message_bag.append(message)
-                with self.mutex:
-                    self.update_ordered_message_bag()
-                    self.mutex.notify()
+                if self.group:
+                    with self.mutex:
+                        if isinstance(message, SequencerMessage):
+                            self.ordered_message_bag_flags.append((message.sender_id, message.orig_sender, message.orig_message_id))
+                        else:
+                            flagged_message = SequencerMessage(self.group.id, self.id, self.expected_sequence_counter, message.sender_id, message.message_id)
+                            self.multicast(flagged_message)
+                            if (message.sender_id, message.message_id) not in self.received_messages: 
+                                self.received_messages[(message.sender_id, message.message_id)] = False
+                                with self.mutex:
+                                    self.ordered_message_bag.append(message)
+                            elif not self.received_messages[(message.sender_id, message.message_id)]:    
+                                self.ordered_message_bag = list(map(self.replace_old_message, self.ordered_message_bag, [message]))
+                        self.update_ordered_message_bag()
+                        self.mutex.notify()
                 continue
             except socket.timeout:
                 pass
 
     def update_ordered_message_bag(self):
-        new_ordered_message_bag = []
+        #new_ordered_message_bag = []
         for message in self.ordered_message_bag: 
             message_id = message.message_id
             sender_id = message.sender_id          
             is_delivered = True
-            if self.group != None:
-                listeners = self.group.followers.copy()
-                listeners.append(self.group.leader)
-                for listener in listeners:
-                    if (listener, sender_id, self.expected_sequence_counter) not in self.ordered_message_bag_flags:
-                        is_delivered = False
-                        # print((listener, sender_id, self.expected_sequence_counter))
-                # print(is_delivered)
-                if is_delivered:
-                    self.deliver(message)
-                else:
-                    new_ordered_message_bag.append(message)
-        self.ordered_message_bag = new_ordered_message_bag
-            
-    def deliver(self, message):
+            members = self.group.followers.copy()
+            members.append(self.group.leader)
+            self.failing_nodes = set()
+            for member in members:
+                if (member, sender_id, self.expected_sequence_counter) not in self.ordered_message_bag_flags:
+                    is_delivered = False
+                    self.failing_nodes.add(member)
+                    # print((member, sender_id, self.expected_sequence_counter))
+            # print(is_delivered)
+            if is_delivered:
+                self.handle_success(message)
+            #else:
+            #    new_ordered_message_bag.append(message)
+        #self.ordered_message_bag = new_ordered_message_bag
+    
+    def replace_old_message(self, old, new):
+        if self.is_same_message(old, new):
+            return new
+        else:
+            return old
+
+    def is_same_message(self, old, new):
+        return old.message_id == new.message_id and old.sender_id == new.sender_id
+
+    def handle_success(self, message):
         """
         Flow reaches here only when all nodes receive this message. 
-        Also, candidates receive this because they need to hear membership updates
+        Also, listeners receive this because they need to hear membership updates
         """
-        print("SUCCESS Delivering a message {0} from {1} with data {2}".format(message.message_id, message.sender_id, message.data))
-        self.expected_sequence_counter = message.message_id + 1    
+        print("Success delivering a message {0} from {1} with data '{2}'".format(message.message_id, message.sender_id, message.data))
+        self.ordered_message_bag = [ x for x in self.ordered_message_bag if not self.is_same_message(x, message) ]
+        self.expected_sequence_counter = message.message_id + 1 
         self.message_id_counter = self.expected_sequence_counter
+        self.failing_nodes = set()
         self.received_messages[(message.sender_id, message.message_id)] = True
         if isinstance(message, MembershipMessage):
             self.modify_membership(message.new_group_id, message.new_leader, message.new_followers)
@@ -153,10 +172,32 @@ class Server(object):
             time.sleep(0.2)
 
             with self.mutex:
+                #if self.current_state == "leader":
+                # TODO: Send heartbeat
+
                 for message in self.ordered_message_bag:
-                    # self.received_messages[(self.id, message.message_id)] = False
-                    if message.sender_id == self.id:
+                    if message.ttl == 0:
+                        print("Node(s) {} failing".format(self.failing_nodes))
+                        self.handle_failure(message)
+                    elif message.sender_id == self.id:
+                        message.ttl -= 1
                         self.multicast(message)
+
+    def handle_failure(self, message):
+        # Reset stuff
+        self.ordered_message_bag = [ x for x in self.ordered_message_bag if not self.is_same_message(x, message) ]
+        self.received_messages.pop((message.sender_id, message.message_id))
+                        
+        # Update membership
+        for failing_node in self.failing_nodes:
+            self.group.leave_group(failing_node)
+        print(self.report_group_membership())
+        
+        # Resend with failed messages
+        if message.sender_id == self.id:
+            self.multicast(message)
+        
+
 
     def user_input_thread(self):
         """ Thread that takes input from user and multicasts it to other processes. """
@@ -172,11 +213,11 @@ class Server(object):
                     leader = list(map(int, params[1]))[0]
                     followers = list(map(int, params[2].replace("[","").replace("]","").split(",")))
                     message = MembershipMessage(self.group.id, self.id, self.message_id_counter, group_id, leader, followers, data=None)
-                    # print(message.repr())
                 else:
                     message = Message(group_id= self.group.id, sender_id= self.id, message_id= self.message_id_counter, data=line)
-                self.multicast(message)
-                self.message_id_counter += 1 
+                #self.multicast(message)
+                self.ordered_message_bag.append(message)
+                self.message_id_counter += 1
 
     def inbox_empty_predicate(self):
         return len(self.ordered_message_bag) == 0
@@ -228,6 +269,7 @@ class Message(object):
         self.group_id = group_id
         self.sender_id = sender_id
         self.message_id = message_id
+        self.ttl = 64 # Typical values is 128 or 255
         self.data = data
 
     def repr(self):

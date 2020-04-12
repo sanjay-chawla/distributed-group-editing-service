@@ -64,8 +64,9 @@ class CheckPoint(object):
         cursor = in_memory_conn.cursor()
         cursor.execute("SELECT * FROM group_membership ORDER BY id DESC LIMIT 1")
         result = cursor.fetchone()
-        group_id = list(map(int, result[1]))[0]
-        leader = list(map(int, result[2]))[0]
-        followers = list(map(int, result[3].replace("[","").replace("]","").split(",")))
-        expected_sequence_counter = list(map(int, result[4]))[0]
+        group_id = int(result[1])
+        leader = int(result[2])
+        if len(result[3].replace("[","").replace("]","").split(",")) != 0:
+            followers = list(map(int, result[3].replace("[","").replace("]","").split(",")))
+        expected_sequence_counter = int(result[4])
         return group_id, leader, followers, expected_sequence_counter 
