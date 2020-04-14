@@ -12,7 +12,8 @@ def set_up_server(server_id, group_id, restore):
     Set up a server depending on whether it is a leader/follower
     or not in the current group
     """
-    server = Server(server_id, group_id, restore)
+    # TODO: remove hardcoding
+    server = Server(server_id, group_id, 3, restore)
     print("Setting up server {0} as {1}".format(server_id, server.current_state))
     return server
 

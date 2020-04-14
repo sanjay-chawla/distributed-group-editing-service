@@ -7,6 +7,7 @@ import pickle
 import time
 import random
 from log import *
+from colorama import init, Fore, Back, Style
 
 MULTICAST_GROUP_ADDRESS = '224.1.1.1'
 MULTICAST_GROUP_PORT = 10000
@@ -15,12 +16,15 @@ CLIENT_GROUP_ADDRESS = '224.1.1.2'
 CLIENT_GROUP_PORT = 10000
 
 class Server(object):
-    def __init__(self, id, group_id, expected_sequence_counter = 1, current_state = "client", restore = False):
+    def __init__(self, id, group_id, group_size, expected_sequence_counter = 1, current_state = "client", restore = False):
+
+        init(autoreset=True)
 
         # Basic
         self.id = id
         self.current_state = current_state
         self.group = None
+        self.group_size = group_size
         self.term = 0 # TODO: Add term to DB
 
         # Log and DB
@@ -34,7 +38,8 @@ class Server(object):
         self.log.purge()
         
         # Comms
-        self.received_messages = {} 
+        self.received_messages = {}
+        self.log_entries = {} 
         self.ordered_message_bag = []
         self.failing_nodes = set()
 
@@ -101,8 +106,8 @@ class Server(object):
     
 
     def report_group_membership(self):
-        print(">> group socket {0}".format(self.multicast_socket.getsockname()))
-        print(">> client socket {0}".format(self.client_socket.getsockname()))
+        #print(">> group socket {0}".format(self.multicast_socket.getsockname()))
+        #print(">> client socket {0}".format(self.client_socket.getsockname()))
         if self.group:
             membership = repr(self.group)
             return "Server {0}'s view of group memembership: {1}".format(self.id, membership)
@@ -125,7 +130,6 @@ class Server(object):
         while True:
             if self.current_state == "leader":
                 try:
-                    send = None
                     byte_message, server = self.client_socket.recvfrom(4096)
                     client_message = pickle.loads(byte_message)
                     if not isinstance(client_message, SequencerMessage):
@@ -134,10 +138,10 @@ class Server(object):
                         self.client_multicast(ack)
                         with self.mutex:
                             self.mutex.wait_for(self.inbox_empty_predicate)
-                            message = Message(group_id = self.group.id, sender_id= self.id, message_id= self.message_id_counter, data=client_message.data)
+                            message = AppendEntryMessage(group_id = self.group.id, sender_id= self.id, message_id= self.message_id_counter, term=self.term, index = client_message.message_id, data=client_message.data)
                             self.multicast(message)
                 except socket.timeout as timeout:
-                    message = Message(group_id = self.group.id, sender_id= self.id, message_id = self.message_id_counter, data='heartbeat')
+                    message = AppendEntryMessage(group_id = self.group.id, sender_id= self.id, message_id= self.message_id_counter, term=self.term, index = -1, data=None)
                     self.multicast(message)
                     pass
                         
@@ -159,11 +163,12 @@ class Server(object):
                     elif isinstance(message, ElectionMessage):
                         if message.term > self.term:
                             message.vote = message.term > self.term
-                            self.term += 1
+                            self.term = message.term
                             message.sender_id = self.id
                             self.timeout.set()
                             self.yes_votes = set()
                             self.no_votes = set()
+                            self.current_state = "follower"
                             self.expected_sequence_counter = message.message_id + 1
                             self.message_id_counter = message.message_id + 1
                             self.multicast(message)
@@ -175,15 +180,21 @@ class Server(object):
                                 self.yes_votes.add(message.sender_id)
                             else:
                                 self.no_votes.add(message.sender_id)
+                            if self.current_state == "candidate" and len(self.yes_votes) >= (self.group_size//2 + 1) and len(self.yes_votes|self.no_votes) == (self.group_size):  
+                                print("Election Success: yes -> {}, no -> {}".format(self.yes_votes, self.no_votes))
+                                self.yes_votes.remove(self.id)
+                                self.modify_membership(self.group.id, self.id, list(self.yes_votes | self.no_votes))
+                                leader_message = MembershipMessage(self.group.id, self.id, self.message_id_counter, self.group.id, self.group.leader, self.group.followers)
+                                self.yes_votes = set()
+                                self.no_votes = set()
+                                self.multicast(leader_message)
+                                self.timeout.set()
                     else:
                         flagged_message = SequencerMessage(self.group.id, self.id, self.expected_sequence_counter, message.sender_id, message.message_id)
                         self.multicast(flagged_message)
-                        if (message.sender_id, message.message_id) not in self.received_messages: 
-                            self.received_messages[(message.sender_id, message.message_id)] = False
+                        if message.message_id not in self.received_messages: 
+                            self.received_messages[message.message_id] = message.data
                             self.ordered_message_bag.append(message)
-                        #elif not self.received_messages[(message.sender_id, message.message_id)]: #isinstance(message, ElectionMessage): 
-                        #    print("message replaced")
-                        #    self.ordered_message_bag = list(map(self.replace_old_message, self.ordered_message_bag, [message]))
                         pass
                     self.update_ordered_message_bag()
                     self.mutex.notify()
@@ -204,6 +215,11 @@ class Server(object):
                     self.failing_nodes.add(member)
                     #print((member, sender_id, self.expected_sequence_counter))
                     pass
+            '''
+            Uncomment if node failure detection not needed
+            if len(self.failing_nodes) <= len(self.group.followers)/2:
+                is_delivered = True
+            '''
             if self.current_state != "leader" or is_delivered:
                 self.handle_success(message)              
     
@@ -223,8 +239,8 @@ class Server(object):
         """
         #if message.data != None or message.data != 'heartbeat':
         #print("Success delivering a message {0} from {1} with data '{2}'".format(int(message.message_id), message.sender_id, message.data))
-        if message.data != None and message.data != 'heartbeat':
-            print(message.data)
+        #if message.data != None and message.data != 'heartbeat':
+        
         self.ordered_message_bag = [ x for x in self.ordered_message_bag if not self.is_same_message(x, message) ]
         self.received_messages[(message.sender_id, message.message_id)] = True
         self.expected_sequence_counter = message.message_id + 1
@@ -232,6 +248,15 @@ class Server(object):
         self.failing_nodes = set()
         if isinstance(message, MembershipMessage):
             self.modify_membership(message.new_group_id, message.new_leader, message.new_followers)
+        else:
+            if message.data:
+                self.log_entries[message.index] = message.data
+                if self.current_state == "leader":
+                    print(Fore.GREEN + message.data)
+                else:
+                    print(Fore.RED + message.data)
+            if self.current_state != "leader" and self.received_messages.get(message.message_id - 1):
+                print(Fore.GREEN + self.received_messages.get(message.message_id - 1))
         return message
 
     def resend_ack_thread(self):
@@ -246,23 +271,12 @@ class Server(object):
                             self.handle_failure(message)
                         elif message.sender_id == self.id:
                             message.ttl -= 1
-                        #    self.multicast(message)
                 self.mutex.notify()
-                # Handle timeout/ start election
-                if self.current_state == "candidate" and len(self.yes_votes) >= (len(list(self.yes_votes | self.no_votes))//2 + 1):  
-                    print("Election Success")
-                    self.yes_votes.remove(self.id)
-                    self.modify_membership(self.group.id, self.id, list(self.yes_votes | self.no_votes))
-                    #self.current_state = "leader"
-                    leader_message = MembershipMessage(self.group.id, self.id, self.message_id_counter, self.group.id, self.id, list(self.yes_votes | self.no_votes))
-                    self.yes_votes = set()
-                    self.no_votes = set()
-                    self.multicast(leader_message)
-
+    
     def handle_failure(self, message):
         # Reset stuff
         self.ordered_message_bag = [ x for x in self.ordered_message_bag if not self.is_same_message(x, message) ]
-        self.received_messages.pop((message.sender_id, message.message_id))
+        self.received_messages.pop(message.message_id)
                         
         # Resend with failed messages
         if self.current_state == "leader":
@@ -270,10 +284,10 @@ class Server(object):
             for failing_node in self.failing_nodes:
                 self.group.leave_group(failing_node)
                 leader_message = MembershipMessage(self.group.id, self.id, self.message_id_counter, self.group.id, self.group.leader, self.group.followers)
-                # TODO send failure message
+                self.multicast(leader_message)
             print(self.report_group_membership())
             if message.sender_id == self.id:
-                message.ttl = 64
+                message.ttl = 32
                 self.multicast(message)
 
     def user_input_thread(self):
@@ -281,7 +295,7 @@ class Server(object):
         print("Enter client commands in the form of 'data' that will be packaged into messages:")
         while True:
             line = input(">> ")
-            message = Message(sender_id= self.id, message_id = self.message_id_counter, data=line)
+            message = Message(group_id= None, sender_id= self.id, message_id = self.message_id_counter, data=line)
             self.client_multicast(message)
             while True:
                 try:
@@ -293,7 +307,26 @@ class Server(object):
                 except socket.timeout:
                     print(" << Timed out waiting for acknowledgement, resending...")
                     #self.client_multicast(message)
+                    pass
+    '''
+    TODO: output thread for clients to listen
 
+    def user_output_thread(self):
+        """ Thread that takes input from user and multicasts it to other processes. """
+        while True:
+            try:
+                byte_message, server = self.client_socket.recvfrom(4096)
+                message = pickle.loads(byte_message)
+                if isinstance(message, SequencerMessage) and message.orig_sender != self.id :
+                    #print(" << Received acknowledgement for order {}".format(message.orig_message_id))
+                    pass
+                else:
+                    if 
+                    print(">> {}")
+            except socket.timeout:
+                print(" << Timed out waiting for acknowledgement, resending...")
+                #self.client_multicast(message)
+    '''
     def inbox_empty_predicate(self):
         return len(self.ordered_message_bag) == 0
 
@@ -303,6 +336,8 @@ class Server(object):
             while self.timeout.wait(timeDelay):
                 # Message arrived / flag set
                 self.timeout.clear()
+
+            # Handle timeout/ start election
             print("Timed out after {} s".format(timeDelay))
             self.current_state = "candidate"
             self.yes_votes = set()
@@ -361,12 +396,12 @@ class Group(object):
 
 class Message(object):
     """ Try to make subclass for specific messages """
-    def __init__(self, group_id=None, sender_id=None, message_id=None, data=None):
+    def __init__(self, group_id, sender_id, message_id, data=None):
         self.group_id = group_id
         self.sender_id = sender_id
         self.message_id = message_id
-        self.ttl = 64 # Typical values is 128 or 255
         self.data = data
+        self.ttl = 32
 
     def repr(self):
         return "Message: sequence {} for group {} from {} with data '{}'.".format(int(self.message_id),
@@ -378,7 +413,6 @@ class MembershipMessage(Message):
         self.new_group_id = new_group_id
         self.new_leader = new_leader
         self.new_followers = new_followers
-
     def repr(self):
         return super(MembershipMessage, self).repr() + 'New Membership: {}'.format(Group(self.new_group_id, self.new_leader, self.new_followers).__repr__())
 
@@ -387,7 +421,6 @@ class SequencerMessage(Message):
         super(SequencerMessage, self).__init__(group_id, sender_id, message_id)
         self.orig_sender = orig_sender
         self.orig_message_id = orig_message_id
-
     def repr(self):
         return super(SequencerMessage, self).repr() + 'Sequencer Message: {} acknowledges "{} from {}".'.format(self.sender_id, self.orig_message_id, self.orig_sender)
 
@@ -401,3 +434,12 @@ class ElectionMessage(Message):
 
     def repr(self):
         return super(ElectionMessage, self).repr() + 'Election Message: {} votes {} for {} in term {}.'.format(self.sender_id, self.vote, self.orig_sender, self.term)
+
+class AppendEntryMessage(Message):
+    def __init__(self, group_id, sender_id, message_id, term, index, data=None):
+        super(AppendEntryMessage, self).__init__(group_id, sender_id, message_id, data)
+        self.term = term
+        self.index = index
+
+    def repr(self):
+        return super(AppendEntryMessage, self).repr() + ' AppendEntryMessage: Commit entry at {}, add entry {} with data "{}".'.format(self.message_id - 1, self.message_id, self.data, self.term)
