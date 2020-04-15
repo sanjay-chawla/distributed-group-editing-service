@@ -10,6 +10,11 @@ class Log(object):
     def __init__(self, server_id):
         path = os.getcwd()
         self.filename = path + "/logs/server" + str(server_id) + ".log"
+        # create a empty log folder if not exsist
+        log_folder_name = path + '/logs'
+        if not os.path.isdir(log_folder_name):
+            os.mkdir(log_folder_name)
+        
     
     def log_then_excute(self, sql_statement, order, in_memory_conn):
         """
@@ -37,6 +42,10 @@ class CheckPoint(object):
         path = os.getcwd()
         self.filename = path + "/checkpoints/server" + str(server_id) + "_checkpoint.db"
         self.log = log
+        # create empty checkpoints folder if not exsists
+        checkpoints_folder_name = path + '/checkpoints'
+        if not os.path.isdir(checkpoints_folder_name):
+            os.mkdir(checkpoints_folder_name)
 
     def take_snapshot(self, log, in_memory_conn):
         """replicate the sql database to self.filename then get rid of the previous logs"""
