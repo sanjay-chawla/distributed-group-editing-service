@@ -133,11 +133,11 @@ class Server(object):
                         #print("Received message from client with data: {}".format(client_message.data))
                         ack = SequencerMessage(self.group.id, self.id, self.expected_sequence_counter, client_message.sender_id, client_message.message_id)
                         self.client_multicast(ack)
-                        #with self.mutex:
-                        #    self.timeout.set()
-                        #    self.mutex.wait_for(self.inbox_empty_predicate)
-                        message = AppendEntryMessage(group_id = self.group.id, sender_id= self.id, message_id= self.message_id_counter, term=self.term, index = client_message.message_id, data=client_message.data)
-                        self.multicast(message)
+                        with self.mutex:
+                            self.timeout.set()
+                            self.mutex.wait_for(self.inbox_empty_predicate)
+                            message = AppendEntryMessage(group_id = self.group.id, sender_id= self.id, message_id= self.message_id_counter, term=self.term, index = client_message.message_id, data=client_message.data)
+                            self.multicast(message)
                 except socket.timeout as timeout:
                     message = AppendEntryMessage(group_id = self.group.id, sender_id= self.id, message_id= self.message_id_counter, term=self.term, index = -1, data=None)
                     self.multicast(message)
