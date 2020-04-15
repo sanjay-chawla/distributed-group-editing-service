@@ -1,1 +1,0 @@
-0	     UPDATE group_membership     SET leader = "3", followers = "0 1 2 4 5"     

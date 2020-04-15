@@ -132,3 +132,5 @@ dmypy.json
 
 # Unwanted output files
 commands.txt
+logs/
+checkpoints/
