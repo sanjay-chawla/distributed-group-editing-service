@@ -67,6 +67,7 @@ class CheckPoint(object):
         group_id = int(result[1])
         leader = int(result[2])
         if len(result[3].replace("[","").replace("]","").split(",")) != 0:
-            followers = list(map(int, result[3].replace("[","").replace("]","").split(",")))
+            followers = list(map(int, result[3].replace("{","").replace("}","").split(",")))
         expected_sequence_counter = int(result[4])
-        return group_id, leader, followers, expected_sequence_counter 
+        term = int(result[5])
+        return group_id, leader, followers, expected_sequence_counter, term

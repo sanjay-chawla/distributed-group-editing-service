@@ -13,7 +13,7 @@ def set_up_server(server_id, group_id, restore):
     or not in the current group
     """
     # TODO: remove hardcoding
-    server = Server(server_id, group_id, 3, restore)
+    server = Server(server_id, group_id, restore=restore)
     print("Setting up server {0} as {1}".format(server_id, server.current_state))
     return server
 
